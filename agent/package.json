@@ -1,0 +1,16 @@
+{
+  "name": "introspect-agent",
+  "version": "1.0.0",
+  "scripts": {
+    "agent": "tsx index.ts"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "groq-sdk": "^0.3.2"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.16",
+    "tsx": "^4.7.1",
+    "typescript": "^5.3.3"
+  }
+}
