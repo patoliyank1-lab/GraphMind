@@ -1,74 +1,56 @@
 import Groq from "groq-sdk";
-import { tools as hardcodedTools, toolsMap as hardcodedToolsMap, executeQuery } from "./tools";
-import { fetchSchema } from "./introspection";
-import { generateTools, buildDynamicQuery } from "./schemaToTools";
 import * as dotenv from 'dotenv';
 import path from 'path';
+import * as readline from 'readline/promises';
+import * as fs from 'fs';
 
-// ---------------------------------------------------------
-// Setup & Configuration
-// ---------------------------------------------------------
+import { fetchSchema } from "./introspection";
+import { generateTools, buildDynamicQuery } from "./schemaToTools";
+import { tools as hardcodedTools, toolsMap as hardcodedToolsMap, executeQuery } from "./tools";
 
 // Load environment variables from the root .env file
 dotenv.config({ path: path.join(__dirname, '../.env') });
 
-const apiKey = process.env.GROQ_API_KEY;
-if (!apiKey) {
-  console.error("Please set GROQ_API_KEY in .env");
-  process.exit(1);
-}
+const groq = new Groq({
+  apiKey: process.env.GROQ_API_KEY
+});
 
-// Initialize the Groq SDK Client
-const groq = new Groq({ apiKey });
+// Transcript log file
+const transcriptFile = path.join(__dirname, 'transcript.json');
 
-// ---------------------------------------------------------
-// Utilities
-// ---------------------------------------------------------
+// --- Agent Self-Authentication ---
+// Note: As a simplification for this learning project, the agent authenticates
+// itself by executing a login mutation on startup with test credentials.
+// It bypasses a true human OAuth or per-action authorization flow.
+let sessionJwt: string | undefined = undefined;
 
-/**
- * Exponential backoff wrapper. 
- * Retained as a safety net even though Groq's RPM is much higher.
- */
-async function withRetry<T>(fn: () => Promise<T>, retries = 4): Promise<T> {
-  const backoffs = [5000, 15000, 30000, 60000];
-  let attempt = 0;
-  while (attempt < retries) {
-    try {
-      return await fn();
-    } catch (e) {
-      const err = e as Error & { status?: number, response?: any };
-      
-      if (err.status === 429 || err.message.includes("429")) {
-        let delay = backoffs[attempt] || 60000;
-        
-        if (err.response && typeof err.response.headers?.get === 'function') {
-          const retryAfter = err.response.headers.get('retry-after');
-          if (retryAfter) {
-            const parsed = parseInt(retryAfter, 10);
-            if (!isNaN(parsed) && parsed > 0) delay = parsed * 1000;
-          }
-        }
-        
-        attempt++;
-        console.warn(`Rate limited (429). Retrying in ${delay}ms... (Attempt ${attempt})`);
-        await new Promise(res => setTimeout(res, delay));
-      } else {
-        throw e;
-      }
-    }
+async function authenticateAgent() {
+  console.log("[System] Authenticating agent with test credentials...");
+  
+  // Try signup first (will fail if already exists, which is fine)
+  try {
+    await executeQuery(`mutation { signup(email: "agent@test.com", password: "agentpassword") }`);
+  } catch (e) {
+    // Ignore error, likely already exists
   }
-  throw new Error("Max retries exceeded due to rate limits.");
+  
+  // Login
+  try {
+    const loginResult = await executeQuery(`mutation { login(email: "agent@test.com", password: "agentpassword") }`);
+    sessionJwt = loginResult.login;
+    console.log("[System] Agent successfully authenticated. Token acquired.");
+  } catch (e) {
+    console.error("[System Warning] Agent failed to authenticate:", (e as Error).message);
+  }
 }
 
-// ---------------------------------------------------------
-// Core Agent Loop
-// ---------------------------------------------------------
-
 /**
- * Main function to execute the single-agent reasoning loop using Groq/Llama-3.3.
+ * REPL loop for interactive multi-turn conversation.
  */
-async function runAgent(goal: string) {
-  // --- Phase 3 Dynamic Setup ---
+async function startRepl(initialGoal?: string) {
+  await authenticateAgent();
+
+  // --- Phase 3 & 4 Dynamic Setup ---
   let schema: any;
   let allTools: Groq.Chat.Completions.CompletionCreateParams.Tool[] = [];
   try {
@@ -86,110 +68,94 @@ async function runAgent(goal: string) {
     process.exit(1);
   }
 
+  let pendingMutation: { toolName: string, argsStr: string } | null = null;
+
   const messages: Groq.Chat.Completions.CompletionCreateParams.Message[] = [
     { 
       role: "system", 
       content: `You are an AI assistant interacting with a dev/CI GraphQL API. Your goal is to answer the user's question using the provided tools.
 CRITICAL RULES:
-1. NEVER guess or invent IDs (like "all" or plain text names). 
-2. If you need a repository ID but only have a name (or need all repos), you MUST call listRepos first to find the exact UUIDs.
-3. Never invent parameters that aren't strictly defined in the tool schema.
-4. Think step by step. If you need data across all repos, fetch the list of repos first, then call the relevant tool for each repo ID.
-5. Do NOT chain tool calls using placeholders (like <<id>> or {{id}}). If you need an ID from listRepos, you MUST call listRepos alone, wait for the response, and then use the real ID in your next turn.
-6. NEVER output XML tags or pseudo-code (like <function=...>). Only use standard JSON for your tool calls.
-7. For tools that take no arguments (like listRepos), call them with an empty JSON object {} — never with null, the string "null", or any other value.` 
-    },
-    { role: "user", content: goal }
+1. NEVER guess or invent IDs. If you need an ID, you MUST call listRepos or another query first to find the exact UUIDs.
+2. Never invent parameters that aren't strictly defined in the tool schema.
+3. Think step by step. If you need data across all repos, fetch the list of repos first, then call the relevant tool for each repo ID.
+4. Do NOT chain tool calls using placeholders (like <<id>>). Use the real ID from a previous turn.
+5. If you call a tool tagged with [MUTATION], it will be blocked on your first attempt. You MUST ask the user for confirmation in plain text. Only if the user says yes, re-call the exact same tool with the exact same arguments to execute it.`
+    }
   ];
 
-  console.log(`\n==========================================`);
-  console.log(`Goal: "${goal}"`);
-  console.log(`==========================================\n`);
-  
-  try {
-    let maxSteps = 5;
-    let finalAnswer = "";
-    let lastFailedCallSignature = "";
-    let repeatedFailureCount = 0;
-    
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+
+  const runLLMTurn = async () => {
+    let maxSteps = 10;
     while (maxSteps > 0) {
-      const response = await withRetry(() => groq.chat.completions.create({
+      const response = await groq.chat.completions.create({
         model: "openai/gpt-oss-120b",
         messages: messages,
+        temperature: 0,
         tools: allTools
-      }));
+      });
 
-      const chatCompletion = response as Groq.Chat.Completions.ChatCompletion;
-      const responseMessage = chatCompletion.choices[0].message;
+      const responseMessage = response.choices[0].message;
       messages.push(responseMessage);
 
+      // Write transcript
+      fs.writeFileSync(transcriptFile, JSON.stringify(messages, null, 2));
+
+      let blockedMutation = false;
+
       if (responseMessage.tool_calls && responseMessage.tool_calls.length > 0) {
-        
         for (const call of responseMessage.tool_calls) {
           if (!call.function || !call.function.name) continue;
 
           const functionName = call.function.name;
           const rawArgs = call.function.arguments;
-          console.log(`[Tool Call]: ${functionName}(${rawArgs})`);
           
+          let parsedArgs: Record<string, unknown> = {};
+          try {
+            parsedArgs = rawArgs ? JSON.parse(rawArgs) : {};
+          } catch (e) {
+            console.error(`[Agent Warning]: Failed to parse args for ${functionName}:`, rawArgs);
+          }
+
+          console.log(`\n[Agent calls tool]: ${functionName}`);
+          console.log(`[Args]: ${JSON.stringify(parsedArgs)}\n`);
+
           let apiResultStr = "";
           try {
-            // --- Robust argument normalization ---
-            let parsedArgs: Record<string, unknown> = {};
-            if (rawArgs && rawArgs.trim() !== "" && rawArgs.trim() !== "null") {
-              try {
-                const attempt = JSON.parse(rawArgs);
-                if (attempt && typeof attempt === "object" && !Array.isArray(attempt)) {
-                  parsedArgs = attempt;
-                }
-              } catch {
-                parsedArgs = {};
-              }
-            }
-
-            // --- Circuit breaker: same tool + same (bad) args repeated back to back ---
-            const callSignature = `${functionName}:${JSON.stringify(parsedArgs)}`;
-            if (callSignature === lastFailedCallSignature) {
-              repeatedFailureCount++;
-            } else {
-              repeatedFailureCount = 0;
-            }
-            if (repeatedFailureCount >= 2) {
-              throw new Error(
-                `This exact call (${functionName} with these arguments) has failed repeatedly. ` +
-                `Stop retrying it — try a different approach or report you cannot complete this request.`
-              );
-            }
-
-            // --- Placeholder validation (unchanged logic, now safe since parsedArgs is guaranteed an object) ---
-            for (const [key, value] of Object.entries(parsedArgs)) {
-              if (typeof value === 'string' && (
-                value.includes('<<') || 
-                value.includes('[[') || 
-                value.includes('{{') || 
-                (value.startsWith('{') && value.endsWith('}'))
-              )) {
-                throw new Error(`Validation Error: Argument '${key}' contains a placeholder '${value}'. You must wait for the previous tool to return a real ID before calling this tool.`);
-              }
-            }
-
             const isHardcoded = functionName === 'getFullRepoDetail';
             if (isHardcoded && hardcodedToolsMap[functionName]) {
               const fn = hardcodedToolsMap[functionName];
-              const apiResult = await fn(parsedArgs as any);
+              const apiResult = await fn(parsedArgs as any); // Hardcoded tools do not require auth for now
               apiResultStr = JSON.stringify(apiResult);
             } else {
-              // Phase 3 Dynamic Execution
-              const queryStr = buildDynamicQuery(schema, functionName);
-              const apiResult = await executeQuery(queryStr, parsedArgs);
-              apiResultStr = JSON.stringify(apiResult);
+              // Dynamic Execution
+              const { queryStr, isMutation } = buildDynamicQuery(schema, functionName);
+              
+              if (isMutation) {
+                const argsStr = JSON.stringify(parsedArgs);
+                const isExactMatch = pendingMutation && pendingMutation.toolName === functionName && pendingMutation.argsStr === argsStr;
+                
+                if (!isExactMatch) {
+                  console.log(`[System Guardrail] Blocked unconfirmed mutation: ${functionName}`);
+                  pendingMutation = { toolName: functionName, argsStr };
+                  apiResultStr = JSON.stringify({ 
+                    error: "MUTATION_BLOCKED_NEEDS_CONFIRMATION",
+                    message: "Mutation blocked. The system has automatically prompted the user for confirmation. Wait for their reply."
+                  });
+                  blockedMutation = true;
+                } else {
+                  console.log(`[System Guardrail] Executing confirmed mutation: ${functionName}`);
+                  const apiResult = await executeQuery(queryStr, parsedArgs, sessionJwt);
+                  apiResultStr = JSON.stringify(apiResult);
+                  pendingMutation = null; // Clear it after execution
+                }
+              } else {
+                const apiResult = await executeQuery(queryStr, parsedArgs, sessionJwt);
+                apiResultStr = JSON.stringify(apiResult);
+              }
             }
-            lastFailedCallSignature = ""; // success clears the breaker
-          } catch (e) {
-            const err = e as Error;
-            console.error(`[Tool Error]: Failed executing ${functionName}:`, err.message);
+          } catch (err: any) {
             apiResultStr = JSON.stringify({ error: err.message });
-            lastFailedCallSignature = `${functionName}:${rawArgs}`;
           }
 
           messages.push({
@@ -198,26 +164,61 @@ CRITICAL RULES:
             name: functionName,
             content: apiResultStr
           });
+
+          // Write transcript after tool call
+          fs.writeFileSync(transcriptFile, JSON.stringify(messages, null, 2));
+        }
+
+        if (blockedMutation) {
+          const syntheticMsg = `I am about to execute the \`${pendingMutation!.toolName}\` mutation with arguments: \`${pendingMutation!.argsStr}\`. Do you want to proceed? (yes/no)`;
+          console.log(`\n[Agent]: ${syntheticMsg}\n`);
+          messages.push({
+            role: "assistant",
+            content: syntheticMsg
+          });
+          fs.writeFileSync(transcriptFile, JSON.stringify(messages, null, 2));
+          break; // Break out of LLM turn, immediately ask user for input
         }
         
         maxSteps--;
       } else {
-        finalAnswer = responseMessage.content || "";
+        const finalAnswer = responseMessage.content || "";
+        console.log(`\n[Agent]: ${finalAnswer}\n`);
         break;
       }
     }
 
-    if (maxSteps === 0 && !finalAnswer) {
-        console.error("[Agent Warning]: Max tool calling steps exceeded.");
-        finalAnswer = "I was unable to complete this request after the maximum allowed tool execution steps. Please try rephrasing or simplifying your request.";
+    if (maxSteps === 0) {
+      console.log(`\n[Agent Warning]: Max tool calling steps exceeded.\n`);
     }
-    
-    console.log(`\n[Final Answer]:\n${finalAnswer}\n`);
-    
-  } catch (e) {
-    const err = e as Error;
-    console.error("[Agent Error]:", err.message);
+  };
+
+  if (initialGoal) {
+    console.log(`\n[User]: ${initialGoal}`);
+    messages.push({ role: "user", content: initialGoal });
+    fs.writeFileSync(transcriptFile, JSON.stringify(messages, null, 2));
+    await runLLMTurn();
   }
+
+  if (process.env.NO_REPL) {
+    rl.close();
+    return;
+  }
+
+  // Interactive Loop
+  while (true) {
+    const input = await rl.question("> ");
+    if (input.toLowerCase() === 'exit' || input.toLowerCase() === 'quit') {
+      break;
+    }
+    if (!input.trim()) continue;
+
+    messages.push({ role: "user", content: input });
+    fs.writeFileSync(transcriptFile, JSON.stringify(messages, null, 2));
+    await runLLMTurn();
+  }
+
+  rl.close();
 }
 
 // ---------------------------------------------------------
@@ -227,10 +228,7 @@ CRITICAL RULES:
 const args = process.argv.slice(2);
 const goal = args.join(" ");
 
-if (!goal) {
-  console.log("Usage: npm run agent -- \"Your question here\"");
-  console.log("   or: bun run index.ts \"Your question here\"");
+startRepl(goal).catch(e => {
+  console.error("[Fatal Error]:", e);
   process.exit(1);
-}
-
-runAgent(goal);
+});

@@ -7,6 +7,7 @@ const INTROSPECTION_QUERY = `
   query IntrospectionQuery {
     __schema {
       queryType { name }
+      mutationType { name }
       types {
         ...FullType
       }

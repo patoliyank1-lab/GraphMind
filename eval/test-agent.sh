@@ -30,7 +30,7 @@ echo ""
 echo "------------------------------------------"
 echo "Test 1: Simple (Goal: List all repositories.)"
 echo "------------------------------------------"
-bun run index.ts "List all repositories."
+NO_REPL=1 bun run index.ts "List all repositories."
 echo -e "\nSleeping 5 seconds to pace requests...\n"
 sleep 5
 
@@ -39,7 +39,7 @@ sleep 5
 echo "------------------------------------------"
 echo "Test 2: Filtered (Goal: Show me all the failed builds for core-api.)"
 echo "------------------------------------------"
-bun run index.ts "Show me all the failed builds for core-api."
+NO_REPL=1 bun run index.ts "Show me all the failed builds for core-api."
 echo -e "\nSleeping 5 seconds to pace requests...\n"
 sleep 5
 
@@ -48,7 +48,7 @@ sleep 5
 echo "------------------------------------------"
 echo "Test 3: Aggregation (Goal: Which repo has the most failed builds?)"
 echo "------------------------------------------"
-bun run index.ts "Which repo has the most failed builds?"
+NO_REPL=1 bun run index.ts "Which repo has the most failed builds?"
 echo -e "\nSleeping 5 seconds to pace requests...\n"
 sleep 5
 
@@ -57,7 +57,7 @@ sleep 5
 echo "------------------------------------------"
 echo "Test 4: Ambiguous (Goal: How is web-frontend doing?)"
 echo "------------------------------------------"
-bun run index.ts "How is web-frontend doing?"
+NO_REPL=1 bun run index.ts "How is web-frontend doing?"
 echo -e "\nSleeping 5 seconds to pace requests...\n"
 sleep 5
 
@@ -68,4 +68,4 @@ sleep 5
 echo "------------------------------------------"
 echo "Test 5: Dynamic Discovery (Goal: say hello)"
 echo "------------------------------------------"
-bun run index.ts "say hello"
+NO_REPL=1 bun run index.ts "say hello"

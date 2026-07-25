@@ -12,6 +12,15 @@ import { DateTimeResolver } from 'graphql-scalars';
 import { prisma } from '../lib/prisma';
 import { MyContext } from '../context';
 
+import bcrypt from 'bcrypt';
+import jwt from 'jsonwebtoken';
+
+if (!process.env.JWT_SECRET) {
+  console.error("FATAL: JWT_SECRET environment variable is not set.");
+  process.exit(1);
+}
+const JWT_SECRET = process.env.JWT_SECRET;
+
 
 export const resolvers = {
   DateTime: DateTimeResolver,
@@ -37,6 +46,35 @@ export const resolvers = {
       if (environmentId) where.environmentId = environmentId;
       return prisma.deployment.findMany({ where });
     },
+  },
+  Mutation: {
+    signup: async (_: unknown, { email, password }: any) => {
+      const hashedPassword = await bcrypt.hash(password, 10);
+      const user = await prisma.user.create({
+        data: { email, password: hashedPassword }
+      });
+      return jwt.sign({ userId: user.id, email: user.email }, JWT_SECRET);
+    },
+    login: async (_: unknown, { email, password }: any) => {
+      const user = await prisma.user.findUnique({ where: { email } });
+      if (!user) throw new Error('Invalid credentials');
+      const valid = await bcrypt.compare(password, user.password);
+      if (!valid) throw new Error('Invalid credentials');
+      return jwt.sign({ userId: user.id, email: user.email }, JWT_SECRET);
+    },
+    retriggerBuild: async (_: unknown, { buildId }: any, context: MyContext) => {
+      if (!context.user) throw new Error('Authentication required');
+      const original = await prisma.build.findUnique({ where: { id: buildId } });
+      if (!original) throw new Error('Build not found');
+      return prisma.build.create({
+        data: {
+          repoId: original.repoId,
+          status: 'PENDING',
+          branch: original.branch,
+          commitSha: original.commitSha,
+        }
+      });
+    }
   },
   Repo: {
     builds: (parent: Repo, _args: unknown, context: MyContext) => {

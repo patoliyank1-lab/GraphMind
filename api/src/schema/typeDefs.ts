@@ -90,4 +90,10 @@ export const typeDefs = `#graphql
     builds(repoId: ID, status: BuildStatus): [Build!]!
     deployments(repoId: ID, environmentId: ID): [Deployment!]!
   }
+
+  type Mutation {
+    signup(email: String!, password: String!): String!
+    login(email: String!, password: String!): String!
+    retriggerBuild(buildId: ID!): Build!
+  }
 `;

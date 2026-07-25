@@ -8,7 +8,7 @@ const GRAPHQL_URL = "http://localhost:5000/graphql";
  * It sends the query and variables via a POST fetch request.
  * Throws errors if the HTTP request fails or if GraphQL returns errors.
  */
-export async function executeQuery(query: string, variables: Record<string, any> = {}) {
+export async function executeQuery(query: string, variables: Record<string, any> = {}, token?: string) {
   // Format the query output nicely for the terminal
   console.log(`\n--- [GraphQL Query Executed] ---`);
   console.log(query.trim());
@@ -17,9 +17,14 @@ export async function executeQuery(query: string, variables: Record<string, any>
   }
   console.log(`--------------------------------\n`);
 
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (token) {
+    headers["Authorization"] = `Bearer ${token}`;
+  }
+
   const response = await fetch(GRAPHQL_URL, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers,
     body: JSON.stringify({ query, variables })
   });
   
