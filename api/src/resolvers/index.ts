@@ -9,6 +9,7 @@ import {
 } from '@prisma/client';
 
 import { prisma } from '../lib/prisma';
+import { MyContext } from '../context';
 
 
 export const resolvers = {
@@ -34,28 +35,27 @@ export const resolvers = {
     },
   },
   Repo: {
-    // Naive resolvers (causes N+1)
-    builds: (parent: Repo) => {
-      return prisma.build.findMany({ where: { repoId: parent.id } });
+    builds: (parent: Repo, _args: unknown, context: MyContext) => {
+      return context.loaders.buildsByRepoLoader.load(parent.id);
     },
-    deployments: (parent: Repo) => {
-      return prisma.deployment.findMany({ where: { repoId: parent.id } });
+    deployments: (parent: Repo, _args: unknown, context: MyContext) => {
+      return context.loaders.deploymentsByRepoLoader.load(parent.id);
     },
   },
   Build: {
     repo: (parent: Build) => {
       return prisma.repo.findUnique({ where: { id: parent.repoId } });
     },
-    testRuns: (parent: Build) => {
-      return prisma.testRun.findMany({ where: { buildId: parent.id } });
+    testRuns: (parent: Build, _args: unknown, context: MyContext) => {
+      return context.loaders.testRunsByBuildLoader.load(parent.id);
     },
   },
   TestRun: {
     build: (parent: TestRun) => {
       return prisma.build.findUnique({ where: { id: parent.buildId } });
     },
-    testResults: (parent: TestRun) => {
-      return prisma.testResult.findMany({ where: { testRunId: parent.id } });
+    testResults: (parent: TestRun, _args: unknown, context: MyContext) => {
+      return context.loaders.testResultsByTestRunLoader.load(parent.id);
     },
   },
   TestResult: {

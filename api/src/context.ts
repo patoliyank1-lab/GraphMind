@@ -1,7 +1,11 @@
+import { createLoaders, Loaders } from './datasources/loaders';
+
 export interface MyContext {
-  // auth and DB access will be wired in here later
+  loaders: Loaders;
 }
 
 export const createContext = async (): Promise<MyContext> => {
-  return {};
+  return {
+    loaders: createLoaders(),
+  };
 };
