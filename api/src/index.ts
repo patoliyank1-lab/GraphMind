@@ -7,27 +7,14 @@ import cors from 'cors';
 import * as dotenv from 'dotenv';
 import path from 'path';
 
+import { typeDefs } from './schema/typeDefs';
+import { resolvers } from './resolvers';
+import { MyContext, createContext } from './context';
+
 // Load env vars from the root .env file if available
 dotenv.config({ path: path.join(__dirname, '../../.env') });
 
 const PORT = process.env.PORT || 4000;
-
-// Minimal placeholder schema
-const typeDefs = `#graphql
-  type Query {
-    health: String
-  }
-`;
-
-const resolvers = {
-  Query: {
-    health: () => 'Introspect API is running',
-  },
-};
-
-interface MyContext {
-  // auth and DB access will be wired in here later
-}
 
 async function startServer() {
   const app = express();
@@ -46,10 +33,7 @@ async function startServer() {
     cors<cors.CorsRequest>(),
     express.json(),
     expressMiddleware(server, {
-      context: async ({ req }) => {
-        // Stub context function
-        return {};
-      },
+      context: async ({ req }) => createContext(),
     })
   );
 

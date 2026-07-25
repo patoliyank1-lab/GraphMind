@@ -1,0 +1,88 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model Repo {
+  id          String       @id @default(uuid())
+  name        String
+  description String?
+  createdAt   DateTime     @default(now())
+  builds      Build[]
+  deployments Deployment[]
+}
+
+model Build {
+  id          String       @id @default(uuid())
+  repoId      String
+  status      BuildStatus
+  branch      String
+  commitSha   String
+  startedAt   DateTime     @default(now())
+  finishedAt  DateTime?
+  repo        Repo         @relation(fields: [repoId], references: [id])
+  testRuns    TestRun[]
+}
+
+model TestRun {
+  id          String       @id @default(uuid())
+  buildId     String
+  status      TestRunStatus
+  durationMs  Int
+  build       Build        @relation(fields: [buildId], references: [id])
+  testResults TestResult[]
+}
+
+model TestResult {
+  id           String         @id @default(uuid())
+  testRunId    String
+  testName     String
+  status       TestResultStatus
+  errorMessage String?
+  testRun      TestRun        @relation(fields: [testRunId], references: [id])
+}
+
+model Environment {
+  id          String       @id @default(uuid())
+  name        String       @unique
+  deployments Deployment[]
+}
+
+model Deployment {
+  id            String           @id @default(uuid())
+  repoId        String
+  environmentId String
+  status        DeploymentStatus
+  deployedAt    DateTime         @default(now())
+  repo          Repo             @relation(fields: [repoId], references: [id])
+  environment   Environment      @relation(fields: [environmentId], references: [id])
+}
+
+enum BuildStatus {
+  PENDING
+  RUNNING
+  SUCCESS
+  FAILED
+}
+
+enum TestRunStatus {
+  PASSED
+  FAILED
+  FLAKY
+}
+
+enum TestResultStatus {
+  PASS
+  FAIL
+  SKIP
+}
+
+enum DeploymentStatus {
+  PENDING
+  SUCCESS
+  FAILED
+  ROLLED_BACK
+}
