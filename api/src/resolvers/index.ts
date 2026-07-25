@@ -7,12 +7,15 @@ import {
   Environment,
   BuildStatus
 } from '@prisma/client';
+import { DateTimeResolver } from 'graphql-scalars';
 
 import { prisma } from '../lib/prisma';
 import { MyContext } from '../context';
 
 
 export const resolvers = {
+  DateTime: DateTimeResolver,
+
   Query: {
     health: () => 'Introspect API is running',
     repos: () => {

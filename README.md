@@ -2,7 +2,7 @@
 
 This project builds an autonomous agent that sits in front of a GraphQL API, uses schema introspection to discover what it can do, and independently plans, executes, and reasons over multi-step queries to satisfy a high-level natural language goal.
 
-**Status:** Phase 1, step 1 — server scaffold only, no schema/DB/agent yet.
+**Status:** Phase 1 complete — GraphQL API with schema, Postgres DB, seed data, resolvers, DataLoader batching, and 10 eval pairs. Next: Phase 2 (agent reasoning loop).
 
 See the full project report for architecture details: [agentic-graphql-analyst-project-report.md](./DOCS/agentic-graphql-analyst-project-report.md)
 

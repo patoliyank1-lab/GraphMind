@@ -1,4 +1,6 @@
 export const typeDefs = `#graphql
+  scalar DateTime
+
   enum BuildStatus {
     PENDING
     RUNNING
@@ -29,7 +31,7 @@ export const typeDefs = `#graphql
     id: ID!
     name: String!
     description: String
-    createdAt: String!
+    createdAt: DateTime!
     builds: [Build!]!
     deployments: [Deployment!]!
   }
@@ -40,8 +42,8 @@ export const typeDefs = `#graphql
     status: BuildStatus!
     branch: String!
     commitSha: String!
-    startedAt: String!
-    finishedAt: String
+    startedAt: DateTime!
+    finishedAt: DateTime
     repo: Repo!
     testRuns: [TestRun!]!
   }
@@ -75,7 +77,7 @@ export const typeDefs = `#graphql
     repoId: ID!
     environmentId: ID!
     status: DeploymentStatus!
-    deployedAt: String!
+    deployedAt: DateTime!
     repo: Repo!
     environment: Environment!
   }
