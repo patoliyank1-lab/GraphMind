@@ -1,5 +1,7 @@
 import Groq from "groq-sdk";
-import { tools, toolsMap } from "./tools";
+import { tools as hardcodedTools, toolsMap as hardcodedToolsMap, executeQuery } from "./tools";
+import { fetchSchema } from "./introspection";
+import { generateTools, buildDynamicQuery } from "./schemaToTools";
 import * as dotenv from 'dotenv';
 import path from 'path';
 
@@ -66,6 +68,24 @@ async function withRetry<T>(fn: () => Promise<T>, retries = 4): Promise<T> {
  * Main function to execute the single-agent reasoning loop using Groq/Llama-3.3.
  */
 async function runAgent(goal: string) {
+  // --- Phase 3 Dynamic Setup ---
+  let schema: any;
+  let allTools: Groq.Chat.Completions.CompletionCreateParams.Tool[] = [];
+  try {
+    schema = await fetchSchema();
+    const dynamicTools = generateTools(schema);
+    
+    // Combine dynamic tools with hardcoded getFullRepoDetail
+    const getFullRepoDetailDef = hardcodedTools.find(t => t.function?.name === 'getFullRepoDetail');
+    allTools = dynamicTools.filter(t => t.function?.name !== 'getFullRepoDetail');
+    if (getFullRepoDetailDef) {
+      allTools.push(getFullRepoDetailDef);
+    }
+  } catch (e) {
+    console.error("Failed to fetch schema or generate tools:", (e as Error).message);
+    process.exit(1);
+  }
+
   const messages: Groq.Chat.Completions.CompletionCreateParams.Message[] = [
     { 
       role: "system", 
@@ -96,7 +116,7 @@ CRITICAL RULES:
       const response = await withRetry(() => groq.chat.completions.create({
         model: "openai/gpt-oss-120b",
         messages: messages,
-        tools: tools
+        tools: allTools
       }));
 
       const chatCompletion = response as Groq.Chat.Completions.ChatCompletion;
@@ -114,14 +134,7 @@ CRITICAL RULES:
           
           let apiResultStr = "";
           try {
-            const fn = toolsMap[functionName];
-            if (!fn) {
-              throw new Error(`Tool ${functionName} does not exist`);
-            }
-
             // --- Robust argument normalization ---
-            // Handles: undefined, empty string, literal "null" string, actual null after parse,
-            // non-object results, and malformed JSON.
             let parsedArgs: Record<string, unknown> = {};
             if (rawArgs && rawArgs.trim() !== "" && rawArgs.trim() !== "null") {
               try {
@@ -129,9 +142,7 @@ CRITICAL RULES:
                 if (attempt && typeof attempt === "object" && !Array.isArray(attempt)) {
                   parsedArgs = attempt;
                 }
-                // if attempt is null, a primitive, or an array — parsedArgs stays {}
               } catch {
-                // malformed JSON from the model — treat as no-args rather than crashing
                 parsedArgs = {};
               }
             }
@@ -162,8 +173,17 @@ CRITICAL RULES:
               }
             }
 
-            const apiResult = await fn(parsedArgs);
-            apiResultStr = JSON.stringify(apiResult);
+            const isHardcoded = functionName === 'getFullRepoDetail';
+            if (isHardcoded && hardcodedToolsMap[functionName]) {
+              const fn = hardcodedToolsMap[functionName];
+              const apiResult = await fn(parsedArgs as any);
+              apiResultStr = JSON.stringify(apiResult);
+            } else {
+              // Phase 3 Dynamic Execution
+              const queryStr = buildDynamicQuery(schema, functionName);
+              const apiResult = await executeQuery(queryStr, parsedArgs);
+              apiResultStr = JSON.stringify(apiResult);
+            }
             lastFailedCallSignature = ""; // success clears the breaker
           } catch (e) {
             const err = e as Error;

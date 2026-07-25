@@ -18,6 +18,7 @@ export const resolvers = {
 
   Query: {
     health: () => 'Introspect API is running',
+    hello: () => 'Hello from a new field the agent has never seen.',
     repos: () => {
       return prisma.repo.findMany();
     },

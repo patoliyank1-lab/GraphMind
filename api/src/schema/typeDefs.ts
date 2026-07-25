@@ -84,6 +84,7 @@ export const typeDefs = `#graphql
 
   type Query {
     health: String
+    hello: String
     repos: [Repo!]!
     repo(id: ID!): Repo
     builds(repoId: ID, status: BuildStatus): [Build!]!

@@ -8,7 +8,7 @@ const GRAPHQL_URL = "http://localhost:5000/graphql";
  * It sends the query and variables via a POST fetch request.
  * Throws errors if the HTTP request fails or if GraphQL returns errors.
  */
-async function executeQuery(query: string, variables: Record<string, any> = {}) {
+export async function executeQuery(query: string, variables: Record<string, any> = {}) {
   // Format the query output nicely for the terminal
   console.log(`\n--- [GraphQL Query Executed] ---`);
   console.log(query.trim());
